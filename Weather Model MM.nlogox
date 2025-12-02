@@ -1,0 +1,1823 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.2" snapToGrid="true">
+  <code><![CDATA[globals [
+  current-jet-latitude
+  current-jet-strength
+  time-step
+  total-cloud-cover
+  time-of-day
+  solar-intensity
+  season
+  day-of-year
+  solar-declination
+]
+
+patches-own [
+  elevation
+  temperature
+  pressure
+  humidity
+  cloud-cover
+  cloud-type
+  wind-u
+  wind-v
+  precipitation
+  water-body?
+  latitude
+  longitude
+  moisture-flux
+  pressure-tendency
+  vertical-velocity
+  cloud-system-id
+  is-raining?
+  low-pressure-center?
+  sea-surface-temp
+  ocean-current-u
+  ocean-current-v
+  low-cloud-cover
+  mid-cloud-cover
+  high-cloud-cover
+  low-cloud-type
+  mid-cloud-type
+  high-cloud-type
+  soil-moisture
+]
+
+to setup
+  clear-all
+  setup-geography
+  setup-atmosphere
+  setup-weather-systems
+  reset-ticks
+end
+
+to setup-geography
+  ask patches [
+    set latitude 25 + (pycor + 40) * (25 / 80)
+    set longitude -125 + (pxcor + 60) * (60 / 120)
+    
+    set water-body? true
+    set elevation 0
+    
+    if pxcor >= -48 and pxcor <= 48 and pycor >= -35 and pycor <= 30 [
+      set water-body? false
+      set elevation 200 + random 300
+    ]
+    
+    if pxcor < -40 and pycor > 25 [
+      set water-body? true
+      set elevation 0
+    ]
+    
+    if pxcor > 35 and pycor > 25 [
+      set water-body? true
+      set elevation 0
+    ]
+    
+    if pxcor < -30 and pycor < -25 [
+      set water-body? true
+      set elevation 0
+    ]
+    
+    if pxcor >= -20 and pxcor <= 5 and pycor >= -38 and pycor < -35 [
+      set water-body? false
+      set elevation 200 + random 400
+    ]
+    
+    if pxcor >= 35 and pxcor <= 45 and pycor >= -38 and pycor <= 0 [
+      set water-body? false
+      set elevation 10 + random 50
+    ]
+    
+    if not water-body? [
+      if pxcor >= -46 and pxcor <= -32 and pycor >= -15 and pycor <= 28 [
+        set elevation 1500 + random 1800
+      ]
+      
+      if pxcor >= -48 and pxcor <= -44 and pycor >= 5 and pycor <= 25 [
+        set elevation 1200 + random 1500
+      ]
+      
+      if pxcor >= -48 and pxcor <= -42 and pycor >= 20 and pycor <= 30 [
+        set elevation 1000 + random 1200
+      ]
+      
+      if pxcor >= 15 and pxcor <= 32 and pycor >= -8 and pycor <= 25 [
+        set elevation 500 + random 900
+      ]
+      
+      if pxcor >= -30 and pxcor <= -5 and pycor >= -20 and pycor <= 25 [
+        set elevation 400 + random 500
+      ]
+      
+      if pxcor >= -5 and pxcor <= 15 [
+        set elevation 150 + random 350
+      ]
+    ]
+    
+    if pycor >= 22 and pycor <= 30 [
+      if (pxcor >= -8 and pxcor <= 0 and pycor >= 27) or
+         (pxcor >= 0 and pxcor <= 6 and pycor >= 24 and pycor <= 29) or
+         (pxcor >= 6 and pxcor <= 13 and pycor >= 25 and pycor <= 29) or
+         (pxcor >= 12 and pxcor <= 20 and pycor >= 23 and pycor <= 26) or
+         (pxcor >= 18 and pxcor <= 24 and pycor >= 24 and pycor <= 27) [
+        set water-body? true
+        set elevation 0
+      ]
+    ]
+    
+    ifelse water-body? [
+      set pcolor blue
+    ] [
+      set pcolor scale-color green elevation 3500 -200
+    ]
+  ]
+end
+
+to setup-atmosphere
+  ask patches [
+    ; Temperature decreases with latitude and elevation
+    set temperature 25 - (latitude - 25) * 0.5 - (elevation / 150)
+    
+    ; Base pressure (decreases with elevation)
+    set pressure 1013 - (elevation / 8.5)
+    
+    ifelse water-body? [
+      set humidity 30 + random 15
+      set soil-moisture 0
+    ] [
+      set humidity 15 + random 15
+      set soil-moisture 50 + random 30  ; Initial soil moisture
+    ]
+    
+    set wind-u 8 + random 12
+    set wind-v (random-float 4) - 2
+    
+    ; Initialize all cloud layers
+    set cloud-cover 0
+    set low-cloud-cover 0
+    set mid-cloud-cover 0
+    set high-cloud-cover 0
+    set cloud-type "clear"
+    set low-cloud-type "clear"
+    set mid-cloud-type "clear"
+    set high-cloud-type "clear"
+    
+    set precipitation 0
+    set moisture-flux 0
+    set pressure-tendency 0
+    set vertical-velocity 0
+    set cloud-system-id 0
+    set is-raining? false
+    set low-pressure-center? false
+    set sea-surface-temp temperature
+    set ocean-current-u 0
+    set ocean-current-v 0
+  ]
+end
+
+to setup-weather-systems
+  set current-jet-latitude initial-jet-latitude
+  set current-jet-strength initial-jet-strength
+  
+  ; Initialize seasonal cycle (start in spring)
+  set day-of-year 80  ; March 21 (spring equinox)
+  set season "Spring"
+  set solar-declination 0
+  
+  ; Initialize day/night cycle (start at dawn)
+  set time-of-day 6
+  set solar-intensity 0
+  
+  ; Initialize ocean currents and SST
+  setup-ocean-currents
+  
+  repeat 2 + random 2 [
+    let low-x -40 + random 70
+    let low-y -25 + random 50
+    ask patches with [distancexy low-x low-y < 12] [
+      let dist distancexy low-x low-y
+      set pressure pressure - (12 - dist) * 4
+      if dist < 3 [
+        set low-pressure-center? true
+      ]
+    ]
+  ]
+  
+  repeat 2 + random 2 [
+    let high-x -30 + random 60
+    let high-y -20 + random 40
+    ask patches with [distancexy high-x high-y < 15] [
+      set pressure pressure + (15 - distancexy high-x high-y) * 3
+    ]
+  ]
+end
+
+to setup-ocean-currents
+  ask patches [
+    set ocean-current-u 0
+    set ocean-current-v 0
+    set sea-surface-temp temperature
+    
+    if water-body? [
+      ; Gulf Stream (warm current along east coast, flowing north)
+      if pxcor > 40 and pycor > -20 and pycor < 30 [
+        set ocean-current-v 0.3  ; Northward flow
+        set sea-surface-temp temperature + 5 + random 3  ; Warm water
+      ]
+      
+      ; California Current (cold current along west coast, flowing south)
+      if pxcor < -45 and pycor > 0 [
+        set ocean-current-v -0.2  ; Southward flow
+        set sea-surface-temp temperature - 4 - random 2  ; Cold water
+      ]
+      
+      ; Gulf of Mexico (warm)
+      if pycor < -28 and pxcor > -30 and pxcor < 35 [
+        set sea-surface-temp temperature + 6 + random 2
+      ]
+      
+      ; Pacific Ocean (moderate temp)
+      if pxcor < -50 [
+        set sea-surface-temp temperature - 2 + random 2
+      ]
+      
+      ; Atlantic Ocean (moderate to warm)
+      if pxcor > 50 [
+        set sea-surface-temp temperature + 1 + random 3
+      ]
+    ]
+  ]
+end
+
+to go
+  set time-step ticks
+  
+  ; Update seasonal and daily cycles
+  update-seasonal-cycle
+  update-solar-cycle
+  
+  update-jet-stream
+  update-ocean-temperatures
+  update-pressure-systems
+  calculate-pressure-gradient
+  calculate-convergence
+  update-winds
+  advect-moisture
+  evapotranspiration
+  orographic-lifting
+  frontal-systems
+  cloud-formation-multilayer
+  cloud-feedback
+  precipitation-process
+  dissipation
+  move-clouds-with-wind
+  update-display
+  
+  set total-cloud-cover mean [cloud-cover] of patches with [not water-body?]
+  
+  tick
+end
+
+to update-seasonal-cycle
+  ; Advance day (each tick = 0.5 hours, 48 ticks = 1 day)
+  if ticks mod 48 = 0 [
+    set day-of-year day-of-year + 1
+    if day-of-year > 365 [
+      set day-of-year 1
+    ]
+    
+    ; Update season
+    if day-of-year >= 1 and day-of-year < 80 [set season "Winter"]
+    if day-of-year >= 80 and day-of-year < 172 [set season "Spring"]
+    if day-of-year >= 172 and day-of-year < 266 [set season "Summer"]
+    if day-of-year >= 266 and day-of-year < 356 [set season "Fall"]
+    if day-of-year >= 356 [set season "Winter"]
+  ]
+  
+  ; Calculate solar declination (sun's latitude)
+  ; -23.5° at winter solstice (day 355), +23.5° at summer solstice (day 172)
+  set solar-declination 23.5 * sin((day-of-year - 80) * 360 / 365)
+  
+  ; Adjust jet stream latitude by season
+  ; Further north in summer, south in winter
+  if season = "Summer" [
+    set current-jet-latitude 50 + random 8
+  ]
+  if season = "Winter" [
+    set current-jet-latitude 30 + random 8
+  ]
+  if season = "Spring" or season = "Fall" [
+    set current-jet-latitude 40 + random 8
+  ]
+end
+
+to update-ocean-temperatures
+  ; SST varies with season
+  ask patches with [water-body?] [
+    ; Base seasonal adjustment
+    let seasonal-adjustment 0
+    if season = "Summer" [set seasonal-adjustment 4]
+    if season = "Winter" [set seasonal-adjustment -4]
+    if season = "Spring" [set seasonal-adjustment 1]
+    if season = "Fall" [set seasonal-adjustment -1]
+    
+    ; Update SST based on latitude and season
+    let base-temp 30 - (latitude - 25) * 0.4
+    set sea-surface-temp base-temp + seasonal-adjustment
+    
+    ; Gulf Stream stays warm
+    if pxcor > 40 and pycor > -20 and pycor < 30 [
+      set sea-surface-temp sea-surface-temp + 5
+    ]
+    
+    ; California Current stays cold
+    if pxcor < -45 and pycor > 0 [
+      set sea-surface-temp sea-surface-temp - 4
+    ]
+    
+    ; Gulf of Mexico very warm
+    if pycor < -28 and pxcor > -30 and pxcor < 35 [
+      set sea-surface-temp sea-surface-temp + 6
+    ]
+  ]
+end
+
+to update-solar-cycle
+  ; Advance time (each tick = 0.5 hours, so 48 ticks = 24 hours)
+  set time-of-day time-of-day + 0.5
+  if time-of-day >= 24 [
+    set time-of-day time-of-day - 24
+  ]
+  
+  ; Calculate solar intensity based on time of day AND latitude AND season
+  ask patches [
+    let local-solar 0
+    
+    if time-of-day >= 6 and time-of-day <= 18 [
+      ; Daytime: calculate sun angle
+      let hours-since-sunrise time-of-day - 6
+      let time-factor sin (hours-since-sunrise * 15)  ; 0 to 1
+      
+      ; Latitude factor: sun is higher at lower latitudes
+      ; Solar declination affects this seasonally
+      let sun-latitude solar-declination
+      let latitude-difference abs(latitude - sun-latitude)
+      let latitude-factor max list 0 (1 - latitude-difference / 50)
+      
+      set local-solar time-factor * latitude-factor
+    ]
+    
+    ; Store as patch variable for evaporation calculation
+    set moisture-flux local-solar  ; Reusing moisture-flux to store local solar
+  ]
+  
+  ; Global solar intensity (for monitoring)
+  set solar-intensity mean [moisture-flux] of patches
+end
+
+to update-jet-stream
+  set current-jet-latitude current-jet-latitude + (random-float 0.4) - 0.2
+  
+  if current-jet-latitude < 35 [set current-jet-latitude 35]
+  if current-jet-latitude > 50 [set current-jet-latitude 50]
+  
+  ask patches [
+    let distance-to-jet abs(latitude - current-jet-latitude)
+    if distance-to-jet < 5 [
+      set wind-u wind-u + (current-jet-strength * (5 - distance-to-jet) / 5) * 0.1
+    ]
+  ]
+end
+
+to update-pressure-systems
+  ask patches [
+    if pressure < 1000 or pressure > 1030 [
+      let px-west nobody
+      if pxcor > min-pxcor [
+        set px-west patch-at -1 0
+      ]
+      
+      if px-west != nobody [
+        let pressure-anomaly pressure - 1013
+        set pressure pressure - (pressure-anomaly * 0.05)
+        ask px-west [
+          set pressure pressure + (pressure-anomaly * 0.05)
+        ]
+      ]
+    ]
+    
+    if pressure < 1015 [
+      set pressure pressure + 0.1
+    ]
+    if pressure > 1015 [
+      set pressure pressure - 0.1
+    ]
+  ]
+  
+  if ticks mod 100 = 0 and random-float 1.0 < 0.3 [
+    let spawn-x -40 + random 30
+    let spawn-y -20 + random 40
+    ask patches with [distancexy spawn-x spawn-y < 10] [
+      let dist distancexy spawn-x spawn-y
+      set pressure pressure - (10 - dist) * 3
+      if dist < 3 [
+        set low-pressure-center? true
+      ]
+    ]
+  ]
+end
+
+to calculate-pressure-gradient
+  ask patches [
+    let px-east ifelse-value (pxcor < max-pxcor) [[pressure] of patch-at 1 0] [pressure]
+    let px-west ifelse-value (pxcor > min-pxcor) [[pressure] of patch-at -1 0] [pressure]
+    let py-north ifelse-value (pycor < max-pycor) [[pressure] of patch-at 0 1] [pressure]
+    let py-south ifelse-value (pycor > min-pycor) [[pressure] of patch-at 0 -1] [pressure]
+    
+    set pressure-tendency ((px-east - px-west) / 2) + ((py-north - py-south) / 2)
+  ]
+end
+
+to calculate-convergence
+  ask patches [
+    let du-dx 0
+    let dv-dy 0
+    
+    if pxcor < max-pxcor and pxcor > min-pxcor [
+      let u-east [wind-u] of patch-at 1 0
+      let u-west [wind-u] of patch-at -1 0
+      set du-dx (u-east - u-west) / 2
+    ]
+    
+    if pycor < max-pycor and pycor > min-pycor [
+      let v-north [wind-v] of patch-at 0 1
+      let v-south [wind-v] of patch-at 0 -1
+      set dv-dy (v-north - v-south) / 2
+    ]
+    
+    set vertical-velocity -1 * (du-dx + dv-dy)
+    
+    if vertical-velocity > 0.5 [
+      set humidity min list 100 (humidity + vertical-velocity * 2)
+    ]
+  ]
+end
+
+to update-winds
+  ask patches [
+    let pgf-u (pressure-tendency / 10)
+    let pgf-v (pressure-tendency / 10)
+    
+    let coriolis-param 0.02 * sin(latitude)
+    let coriolis-u coriolis-param * wind-v * 0.75
+    let coriolis-v -1 * coriolis-param * wind-u * 0.75
+    
+    set wind-u wind-u - pgf-u + coriolis-u
+    set wind-v wind-v - pgf-v + coriolis-v
+    
+    if not water-body? [
+      set wind-u wind-u * 0.9
+      set wind-v wind-v * 0.9
+    ]
+    
+    set wind-u wind-u + (random-float 0.6) - 0.2
+    set wind-v wind-v + (random-float 0.6) - 0.2
+    
+    if wind-u > 40 [set wind-u 40]
+    if wind-u < -40 [set wind-u -40]
+    if wind-v > 30 [set wind-v 30]
+    if wind-v < -30 [set wind-v -30]
+  ]
+end
+
+to advect-moisture
+  ask patches [
+    if random-float 1.0 < 0.2 [
+      let delta-x round(wind-u / 5)
+      let delta-y round(wind-v / 5)
+      
+      if delta-x != 0 or delta-y != 0 [
+        let source-patch patch-at (-1 * delta-x) (-1 * delta-y)
+        if source-patch != nobody [
+          let transported [humidity] of source-patch * 0.1
+          set humidity humidity + transported
+          ask source-patch [
+            set humidity humidity - transported
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+to evapotranspiration
+  ; Evaporation varies with solar heating, cloud cover, and SST
+  ask patches [
+    ; Calculate solar heating factor (reduced by clouds)
+    let total-cloud-shading low-cloud-cover + mid-cloud-cover + high-cloud-cover
+    let cloud-shading 1.0 - (total-cloud-shading / 250)  ; Can have up to 3 layers
+    if cloud-shading < 0 [set cloud-shading 0]
+    let local-solar moisture-flux  ; We stored it here
+    let heating-factor local-solar * cloud-shading
+    
+    if water-body? and random-float 1.0 < 0.15 [
+      ; Water evaporation - driven by SST (not air temp)
+      let base-evap 0.01 + (sea-surface-temp / 650)
+      let solar-boost base-evap * heating-factor * 5  ; Quadruple in full sun
+      
+      ; Warmer SST = much more evaporation (hurricane fuel!)
+      if sea-surface-temp > 26 [
+        set solar-boost solar-boost * (1 + (sea-surface-temp - 26) / 10)
+      ]
+      
+      set humidity min list 100 (humidity + base-evap + solar-boost)
+    ]
+    
+    if not water-body? and temperature > 10 and random-float 1.0 < 0.08 [
+      ; Land transpiration - depends on soil moisture
+      let moisture-factor soil-moisture / 100
+      let base-evap (0.0075 + (temperature / 700)) * moisture-factor
+      let solar-boost base-evap * heating-factor * 2
+      
+      set humidity min list 100 (humidity + base-evap + solar-boost)
+      
+      ; Deplete soil moisture
+      set soil-moisture soil-moisture - (base-evap + solar-boost) * 2
+      if soil-moisture < 0 [set soil-moisture 0]
+    ]
+  ]
+end
+
+to orographic-lifting
+  ; Mountains force air upward, creating clouds
+  ask patches with [elevation > 1500 and not water-body?] [
+    ; Upwind side of mountains
+    if wind-u > 5 [
+      let lift-factor (elevation / 3000) * (wind-u / 20)
+      
+      ; Add moisture from lifting
+      set humidity min list 100 (humidity + lift-factor * 3)
+      
+      ; Create orographic clouds if conditions are right
+      if humidity > 70 and low-cloud-cover < 50 [
+        let new-cloud-cover lift-factor * 15
+        set low-cloud-cover min list 80 (low-cloud-cover + new-cloud-cover)
+        set low-cloud-type "stratocumulus"
+        
+        ; Can produce light rain
+        if low-cloud-cover > 65 and humidity > 80 [
+          set precipitation precipitation + lift-factor * 0.5
+        ]
+      ]
+    ]
+  ]
+end
+
+
+to frontal-systems
+  ask patches with [not water-body?] [
+    let temp-gradient 0
+    
+    if pxcor < max-pxcor [
+      let neighbor-temp [temperature] of patch-at 1 0
+      set temp-gradient abs(temperature - neighbor-temp)
+    ]
+    
+    if temp-gradient > 5 [
+      set humidity min list 100 (humidity + 5)
+      set cloud-cover min list 100 (cloud-cover + 10)
+      
+      if temperature < 0 [
+        set cloud-type "nimbostratus"
+      ]
+      if temperature >= 0 and temperature < 15 [
+        set cloud-type "stratus"
+      ]
+    ]
+  ]
+end
+
+to cloud-formation-multilayer
+  ; Form clouds near low-pressure centers AND over moist areas
+  ask patches with [not water-body?] [
+    ; LOW CLOUDS - Improved formation criteria
+    if low-cloud-cover = 0 [
+      let formation-likelihood 0
+      
+      ; Strong low pressure bonus
+      if pressure < 1008 [
+        set formation-likelihood formation-likelihood + (1008 - pressure) / 4
+      ]
+      
+      ; High humidity is key
+      if humidity > 75 [
+        set formation-likelihood formation-likelihood + (humidity - 75) / 6
+      ]
+      
+      ; Convergence bonus
+      if vertical-velocity > 1.5 [
+        set formation-likelihood formation-likelihood + vertical-velocity * 0.8
+      ]
+      
+      ; Nearby clouds help
+      let nearby-low-clouds count neighbors with [low-cloud-cover > 25]
+      if nearby-low-clouds >= 2 [
+        set formation-likelihood formation-likelihood + (nearby-low-clouds * 1.5)
+      ]
+      
+      ; REDUCED threshold - form more readily
+      if random-float 1.0 < (formation-likelihood * 0.008) [
+        let initial-size 20 + (humidity - 75) / 2
+        set initial-size max list 15 (min list 45 initial-size)
+        set low-cloud-cover initial-size
+        set low-cloud-type "cumulus"
+      ]
+    ]
+    
+    ; MID clouds - slightly less restrictive
+    if mid-cloud-cover = 0 and humidity > 70 and temperature < 12 [
+      if pressure < 1010 and random-float 1.0 < 0.003 [
+        set mid-cloud-cover 15 + random 20
+        set mid-cloud-type "altocumulus"
+      ]
+    ]
+    
+    ; HIGH clouds - slightly less restrictive
+    if high-cloud-cover = 0 and temperature < 3 and humidity > 65 [
+      if pressure < 1012 and random-float 1.0 < 0.002 [
+        set high-cloud-cover 10 + random 15
+        set high-cloud-type "cirrus"
+      ]
+    ]
+  ]
+  
+  ; Growth phase - keep as is but with slight adjustments
+  if ticks mod 1 = 0 [
+    ask patches with [low-cloud-cover > 15 and low-cloud-cover < 95 and not is-raining?] [
+      let cloudy-neighbors count neighbors with [low-cloud-cover > 30]
+      
+      ; Require good clustering (lowered threshold)
+      if cloudy-neighbors >= 3 or low-cloud-cover > 50 [
+        let nearby-moisture sum [humidity] of neighbors + humidity
+        
+        if nearby-moisture > 350 [
+          let moisture-absorbed 0
+          ask neighbors [
+            if humidity > 30 [
+              let donated-moisture (humidity - 30) * 0.6
+              set humidity humidity - donated-moisture
+              set moisture-absorbed moisture-absorbed + donated-moisture
+            ]
+          ]
+          
+          let growth moisture-absorbed / 10
+          set low-cloud-cover min list 100 (low-cloud-cover + growth)
+          
+          ; Bonuses for dense packing
+          if cloudy-neighbors >= 5 [
+            set low-cloud-cover low-cloud-cover + 2.0
+          ]
+          if cloudy-neighbors >= 6 [
+            set low-cloud-cover low-cloud-cover + 3.5
+          ]
+          if cloudy-neighbors >= 7 [
+            set low-cloud-cover low-cloud-cover + 5.0
+          ]
+          
+          ; Strong low pressure bonus
+          if pressure < 1004 [
+            set low-cloud-cover low-cloud-cover + 2.5
+          ]
+          
+          if low-cloud-cover >= 70 [
+            set is-raining? true
+            set low-cloud-type "cumulonimbus"
+          ]
+        ]
+      ]
+      
+      ; Update cloud type
+      if not is-raining? [
+        if low-cloud-cover < 35 [
+          set low-cloud-type "cumulus"
+        ]
+        if low-cloud-cover >= 35 and low-cloud-cover < 65 [
+          set low-cloud-type "stratocumulus"
+        ]
+        if low-cloud-cover >= 65 [
+          set low-cloud-type "stratus"
+        ]
+      ]
+    ]
+  ]
+  
+  ; Update composite cloud cover
+  ask patches [
+    set cloud-cover low-cloud-cover + (mid-cloud-cover * 0.5) + (high-cloud-cover * 0.3)
+    if cloud-cover > 100 [set cloud-cover 100]
+    
+    if low-cloud-cover > 25 [
+      set cloud-type low-cloud-type
+    ]
+    if low-cloud-cover <= 25 and mid-cloud-cover > 25 [
+      set cloud-type mid-cloud-type
+    ]
+    if low-cloud-cover <= 25 and mid-cloud-cover <= 25 and high-cloud-cover > 15 [
+      set cloud-type high-cloud-type
+    ]
+    if low-cloud-cover <= 25 and mid-cloud-cover <= 25 and high-cloud-cover <= 15 [
+      set cloud-type "clear"
+    ]
+  ]
+end
+
+to cloud-feedback
+  ask patches with [cloud-cover > 60 and not is-raining?] [
+    let cloudy-neighbors count neighbors with [cloud-cover > 60]
+    
+    if cloudy-neighbors >= 7 [
+      set vertical-velocity vertical-velocity + 0.05
+    ]
+  ]
+end
+
+to precipitation-process
+  ; First, generate precipitation from raining clouds
+  ask patches with [is-raining?] [
+    set precipitation (low-cloud-cover - 60) / 5
+    
+    ; Heavy rain depletes cloud
+    set low-cloud-cover low-cloud-cover - precipitation * 4
+    set humidity min list 100 (humidity + precipitation * 1.5)
+    set temperature temperature - (precipitation * 0.3)
+    
+    if low-cloud-cover < 20 [
+      set is-raining? false
+      set low-cloud-type "clear"
+    ]
+  ]
+  
+  ; NEW: Apply precipitation to ground (separate from cloud depletion)
+  ask patches with [precipitation > 0.1] [
+    if not water-body? [
+      ; Rain recharges soil moisture on LAND
+      set soil-moisture min list 100 (soil-moisture + precipitation * 3)
+    ]
+    
+    ; Precipitation gradually decreases
+    set precipitation precipitation * 0.7
+    if precipitation < 0.1 [set precipitation 0]
+  ]
+end
+to dissipation
+  ask patches [
+    ; LOW CLOUDS - Balanced dissipation
+    if low-cloud-cover > 0 and not is-raining? [
+      let cloudy-neighbors count neighbors with [low-cloud-cover > 25]
+      let base-dissipation 3.5  ; More moderate
+      
+      ; Isolated clouds dissipate faster
+      if cloudy-neighbors < 2 [
+        set base-dissipation 10.0
+      ]
+      if cloudy-neighbors = 2 [
+        set base-dissipation 7.0
+      ]
+      if cloudy-neighbors = 3 or cloudy-neighbors = 4 [
+        set base-dissipation 5.0
+      ]
+      
+      ; Dense cores persist
+      if cloudy-neighbors >= 6 [
+        set base-dissipation 1.0
+      ]
+      if cloudy-neighbors >= 7 [
+        set base-dissipation 0.4
+      ]
+      
+      ; High pressure dissipates clouds
+      if pressure > 1018 [
+        set base-dissipation base-dissipation + (pressure - 1018) / 2
+      ]
+      
+      ; Low pressure preserves clouds
+      if pressure < 1006 [
+        set base-dissipation base-dissipation - (1006 - pressure) / 3
+        if base-dissipation < 0.2 [set base-dissipation 0.2]
+      ]
+      
+      ; Over water dissipates faster (but not as extreme)
+      ifelse water-body? [
+        set low-cloud-cover low-cloud-cover - (base-dissipation + 6.0)
+      ] [
+        set low-cloud-cover low-cloud-cover - base-dissipation
+      ]
+      
+      ; Dry air kills clouds
+      if humidity < 25 [
+        set low-cloud-cover low-cloud-cover - 5.0
+      ]
+      
+      if low-cloud-cover < 0 [set low-cloud-cover 0]
+    ]
+    
+    ; MID CLOUDS
+    if mid-cloud-cover > 0 [
+      set mid-cloud-cover mid-cloud-cover - 1.5
+      if humidity < 45 [
+        set mid-cloud-cover mid-cloud-cover - 2.0
+      ]
+      if mid-cloud-cover < 0 [set mid-cloud-cover 0]
+    ]
+    
+    ; HIGH CLOUDS
+    if high-cloud-cover > 0 [
+      set high-cloud-cover high-cloud-cover - 1.0
+      if high-cloud-cover < 0 [set high-cloud-cover 0]
+    ]
+    
+    ; Clear rain status if no clouds
+    if low-cloud-cover = 0 [
+      set is-raining? false
+      set low-cloud-type "clear"
+    ]
+  ]
+end
+
+to move-clouds-with-wind
+  ; Move ALL clouds together based on average wind (faster movement)
+  let cloudy-patches patches with [low-cloud-cover > 20]  ; Changed threshold
+  
+  if any? cloudy-patches [
+    let avg-wind-u mean [wind-u] of cloudy-patches
+    let avg-wind-v mean [wind-v] of cloudy-patches
+    
+    ; Calculate movement - FASTER
+    let shift-x round(avg-wind-u / 4)  ; Was /6, now /4 for faster movement
+    let shift-y round(avg-wind-v / 4)  ; Was /10, now /8
+    
+    ; Move every tick if wind is strong enough
+    if abs shift-x >= 1 or abs shift-y >= 1 [
+      ; Store all cloud data
+      let cloud-data []
+      ask cloudy-patches [
+        set cloud-data lput (list pxcor pycor low-cloud-cover mid-cloud-cover high-cloud-cover low-cloud-type mid-cloud-type high-cloud-type is-raining?) cloud-data
+      ]
+      
+      ; Clear all clouds
+      ask cloudy-patches [
+        set low-cloud-cover 0
+        set mid-cloud-cover 0
+        set high-cloud-cover 0
+        set low-cloud-type "clear"
+        set mid-cloud-type "clear"
+        set high-cloud-type "clear"
+        set is-raining? false
+      ]
+      
+      ; Place clouds at new positions
+      foreach cloud-data [ cloud-info ->
+        let old-x item 0 cloud-info
+        let old-y item 1 cloud-info
+        let lcc item 2 cloud-info
+        let mcc item 3 cloud-info
+        let hcc item 4 cloud-info
+        let lct item 5 cloud-info
+        let mct item 6 cloud-info
+        let hct item 7 cloud-info
+        let ir item 8 cloud-info
+        
+        let new-x old-x + shift-x
+        let new-y old-y + shift-y
+        
+        ; Place at new location if in bounds
+        if new-x >= min-pxcor and new-x <= max-pxcor and
+           new-y >= min-pycor and new-y <= max-pycor [
+          ask patch new-x new-y [
+            if lcc > low-cloud-cover [
+              set low-cloud-cover lcc
+              set mid-cloud-cover mcc
+              set high-cloud-cover hcc
+              set low-cloud-type lct
+              set mid-cloud-type mct
+              set high-cloud-type hct
+              set is-raining? ir
+            ]
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+to update-display
+  ask patches [
+    ; Only show clouds at 20%+ (makes them more visible when they exist)
+    ifelse cloud-cover > 80 [
+      set pcolor white
+    ] [
+      ifelse cloud-cover > 60 [
+        set pcolor gray + 2
+      ] [
+        ifelse cloud-cover > 40 [
+          set pcolor gray + 1
+        ] [
+          ifelse cloud-cover > 20 [  ; Changed from >20 to exactly >20
+            set pcolor gray
+          ] [
+            ; Below 20% - show terrain/water
+            ifelse water-body? [
+              set pcolor blue
+            ] [
+              set pcolor scale-color green elevation 3500 -200
+            ]
+          ]
+        ]
+      ]
+    ]
+    
+    ; Show heavy precipitation
+    if precipitation > 2 [
+      set pcolor blue - 2
+    ]
+  ]
+end]]></code>
+  <widgets>
+    <view x="368" wrappingAllowedX="false" y="10" frameRate="30.0" minPycor="-60" height="1576" showTickCounter="true" patchSize="13.0" fontSize="10" wrappingAllowedY="false" width="1576" tickCounterLabel="ticks" maxPycor="60" updateMode="0" maxPxcor="60" minPxcor="-60"></view>
+    <button x="125" y="65" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
+    <button x="125" y="115" height="40" disableUntilTicks="false" forever="true" kind="Observer" width="55">go</button>
+    <slider x="80" step="1" y="170" max="60" width="250" display="initial-jet-strength" height="50" min="10" direction="Horizontal" default="36.0" variable="initial-jet-strength"></slider>
+    <slider x="80" step="0.5" y="230" max="50" width="250" display="initial-jet-latitude" height="50" min="25" direction="Horizontal" default="33.0" variable="initial-jet-latitude"></slider>
+  </widgets>
+  <info>## WHAT IS IT?
+
+(a general understanding of what the model is trying to show or explain)
+
+## HOW IT WORKS
+
+(what rules the agents use to create the overall behavior of the model)
+
+## HOW TO USE IT
+
+(how to use the model, including a description of each of the items in the Interface tab)
+
+## THINGS TO NOTICE
+
+(suggested things for the user to notice while running the model)
+
+## THINGS TO TRY
+
+(suggested things for the user to try to do (move sliders, switches, etc.) with the model)
+
+## EXTENDING THE MODEL
+
+(suggested things to add or change in the Code tab to make the model more complicated, detailed, accurate, etc.)
+
+## NETLOGO FEATURES
+
+(interesting or unusual features of NetLogo that the model uses, particularly in the Code tab; or where workarounds were needed for missing features)
+
+## RELATED MODELS
+
+(models in the NetLogo Models Library and elsewhere which are of related interest)
+
+## CREDITS AND REFERENCES
+
+(a reference to the model's URL on the web if it has one, as well as any other necessary credits, citations, and links)
+</info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="sheep" rotatable="false" editableColorIndex="15">
+      <circle x="203" y="65" marked="true" color="-1" diameter="88" filled="true"></circle>
+      <circle x="70" y="65" marked="true" color="-1" diameter="162" filled="true"></circle>
+      <circle x="150" y="105" marked="true" color="-1" diameter="120" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="218" y="120"></point>
+        <point x="240" y="165"></point>
+        <point x="255" y="165"></point>
+        <point x="278" y="120"></point>
+      </polygon>
+      <circle x="214" y="72" marked="false" color="-1920102913" diameter="67" filled="true"></circle>
+      <rectangle endX="179" startY="223" marked="true" color="-1" endY="298" startX="164" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="45" y="285"></point>
+        <point x="30" y="285"></point>
+        <point x="30" y="240"></point>
+        <point x="15" y="195"></point>
+        <point x="45" y="210"></point>
+      </polygon>
+      <circle x="3" y="83" marked="true" color="-1" diameter="150" filled="true"></circle>
+      <rectangle endX="80" startY="221" marked="true" color="-1" endY="296" startX="65" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="195" y="285"></point>
+        <point x="210" y="285"></point>
+        <point x="210" y="240"></point>
+        <point x="240" y="210"></point>
+        <point x="195" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="276" y="85"></point>
+        <point x="285" y="105"></point>
+        <point x="302" y="99"></point>
+        <point x="294" y="83"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="219" y="85"></point>
+        <point x="210" y="105"></point>
+        <point x="193" y="99"></point>
+        <point x="201" y="83"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="wolf" rotatable="false" editableColorIndex="0">
+      <polygon color="255" filled="true" marked="false">
+        <point x="253" y="133"></point>
+        <point x="245" y="131"></point>
+        <point x="245" y="133"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="2" y="194"></point>
+        <point x="13" y="197"></point>
+        <point x="30" y="191"></point>
+        <point x="38" y="193"></point>
+        <point x="38" y="205"></point>
+        <point x="20" y="226"></point>
+        <point x="20" y="257"></point>
+        <point x="27" y="265"></point>
+        <point x="38" y="266"></point>
+        <point x="40" y="260"></point>
+        <point x="31" y="253"></point>
+        <point x="31" y="230"></point>
+        <point x="60" y="206"></point>
+        <point x="68" y="198"></point>
+        <point x="75" y="209"></point>
+        <point x="66" y="228"></point>
+        <point x="65" y="243"></point>
+        <point x="82" y="261"></point>
+        <point x="84" y="268"></point>
+        <point x="100" y="267"></point>
+        <point x="103" y="261"></point>
+        <point x="77" y="239"></point>
+        <point x="79" y="231"></point>
+        <point x="100" y="207"></point>
+        <point x="98" y="196"></point>
+        <point x="119" y="201"></point>
+        <point x="143" y="202"></point>
+        <point x="160" y="195"></point>
+        <point x="166" y="210"></point>
+        <point x="172" y="213"></point>
+        <point x="173" y="238"></point>
+        <point x="167" y="251"></point>
+        <point x="160" y="248"></point>
+        <point x="154" y="265"></point>
+        <point x="169" y="264"></point>
+        <point x="178" y="247"></point>
+        <point x="186" y="240"></point>
+        <point x="198" y="260"></point>
+        <point x="200" y="271"></point>
+        <point x="217" y="271"></point>
+        <point x="219" y="262"></point>
+        <point x="207" y="258"></point>
+        <point x="195" y="230"></point>
+        <point x="192" y="198"></point>
+        <point x="210" y="184"></point>
+        <point x="227" y="164"></point>
+        <point x="242" y="144"></point>
+        <point x="259" y="145"></point>
+        <point x="284" y="151"></point>
+        <point x="277" y="141"></point>
+        <point x="293" y="140"></point>
+        <point x="299" y="134"></point>
+        <point x="297" y="127"></point>
+        <point x="273" y="119"></point>
+        <point x="270" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="-1" y="195"></point>
+        <point x="14" y="180"></point>
+        <point x="36" y="166"></point>
+        <point x="40" y="153"></point>
+        <point x="53" y="140"></point>
+        <point x="82" y="131"></point>
+        <point x="134" y="133"></point>
+        <point x="159" y="126"></point>
+        <point x="188" y="115"></point>
+        <point x="227" y="108"></point>
+        <point x="236" y="102"></point>
+        <point x="238" y="98"></point>
+        <point x="268" y="86"></point>
+        <point x="269" y="92"></point>
+        <point x="281" y="87"></point>
+        <point x="269" y="103"></point>
+        <point x="269" y="113"></point>
+      </polygon>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+</model>
