@@ -49,6 +49,7 @@ to setup
   setup-geography
   setup-atmosphere
   setup-weather-systems
+  setup-sample-patches
   reset-ticks
 end
 
@@ -955,16 +956,26 @@ to update-uplots
   set-current-plot "Average Cloud Cover"
   set-current-plot-pen "clouds"
   plot mean [cloud-cover] of patches with [not water-body?]
-
-  ; Track cloud cover at random sample pixels
-  ; (store them once at setup)
-  if ticks = 0 [
-    set sample-patches n-of 5 patches
+  
+  ; Plot cloud cover for selected sample patches
+  set-current-plot "Sample Pixel Cloud Cover"
+  let i 0
+  foreach sample-patches [
+    p ->
+    set-current-plot-pen word "cloud-cover-" i
+    plot [cloud-cover] of p
+    set i i + 1
   ]
-  ;set-current-plot "Sample Pixel Cloud Cover"
-  ;foreach sample-patches [
-  ;  p -> plot [cloud-cover] of p
-  ;]
+end
+
+to setup-sample-patches
+  ;; Choose 4 patches around the simulation
+  set sample-patches (list
+    patch -37 5   ;; left
+    patch 0 -28  ;; bottom-mid
+    patch 0 21   ;; top-mid
+    patch 40 5   ;; right
+  )
 end]]></code>
   <widgets>
     <view x="985" wrappingAllowedX="false" y="10" frameRate="30.0" minPycor="-60" height="1576" showTickCounter="true" patchSize="13.0" fontSize="10" wrappingAllowedY="false" width="1576" tickCounterLabel="ticks" maxPycor="60" updateMode="0" maxPxcor="60" minPxcor="-60"></view>
@@ -991,9 +1002,21 @@ end]]></code>
     <plot x="150" autoPlotX="true" yMax="10.0" autoPlotY="true" y="935" xMin="0.0" height="490" legend="false" xMax="10.0" yMin="0.0" width="820" display="Sample Pixel Cloud Cover">
       <setup></setup>
       <update></update>
-      <pen interval="1.0" mode="0" display="cloud-cover" color="-16777216" legend="true">
+      <pen interval="1.0" mode="0" display="cloud-cover-0" color="-2674135" legend="true">
         <setup></setup>
-        <update>plot count turtles</update>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="cloud-cover-1" color="-13840069" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="cloud-cover-2" color="-6459832" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="cloud-cover-3" color="-13345367" legend="true">
+        <setup></setup>
+        <update></update>
       </pen>
     </plot>
   </widgets>
